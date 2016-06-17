@@ -520,7 +520,8 @@ def change(connect_spec, dn, before, after):
     This does the same thing as :py:func:`modify`, but with a simpler
     interface.  Instead of taking a list of directives, it takes a
     before and after view of an entry, determines the differences
-    between the two, computes the directives, and executes them.
+    between the two, computes directives based on the differences, and
+    executes the directives.
 
     Any attribute value present in ``before`` but missing in ``after``
     is deleted.  Any attribute value present in ``after`` but missing
@@ -539,11 +540,13 @@ def change(connect_spec, dn, before, after):
 
     :param before:
         The expected state of the entry before modification.  This is
-        a dict mapping each attribute name to an iterable of values.
+        a mapping that maps each attribute name to an iterable of
+        values.
 
     :param after:
         The desired state of the entry after modification.  This is a
-        dict mapping each attribute name to an iterable of values.
+        mapping that maps each attribute name to an iterable of
+        values.
 
     :returns:
         ``True`` if successful, raises an exception otherwise.

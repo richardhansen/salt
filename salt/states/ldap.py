@@ -388,7 +388,7 @@ def _process_entries(l, entries):
         to another dict that maps an attribute name to a set of its
         values (it's a set because according to the LDAP spec,
         attribute value ordering is unspecified and there can't be
-        duplicates).  The structure looks like this:
+        duplicates).  The structure looks like this::
 
             {dn1: {attr1: set([val1])},
              dn2: {attr1: set([val2]), attr2: set([val3, val4])}}
@@ -400,8 +400,8 @@ def _process_entries(l, entries):
         database will be deleted, the DN in ``new`` will be mapped to
         an empty dict.  All value sets are non-empty:  An attribute
         that will be added to an entry is not included in ``old``, and
-        an attribute that will be deleted frm an entry is not included
-        in ``new``.
+        an attribute that will be deleted from an entry is not
+        included in ``new``.
 
         These are OrderedDicts to ensure that the user-supplied
         entries are processed in the user-specified order (in case
