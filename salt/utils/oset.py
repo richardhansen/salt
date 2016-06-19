@@ -202,3 +202,16 @@ class OrderedSet(collections.MutableSet):
             return False
         else:
             return set(self) == other_as_set
+
+
+class WeaklyOrderedSet(OrderedSet):
+    """Identical to OrderedSet except __eq__() doesn't care about order.
+    """
+    def __eq__(self, other):
+        try:
+            other_as_set = set(other)
+        except TypeError:
+            # If `other` can't be converted into a set, it's not equal.
+            return False
+        else:
+            return set(self) == other_as_set
