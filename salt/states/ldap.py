@@ -18,7 +18,7 @@ import logging
 # Import Salt libs
 from salt.ext import six
 from salt.utils.odict import OrderedDict
-from salt.utils.oset import OrderedSet
+from salt.utils.oset import OrderedSet, WeaklyOrderedSet
 
 log = logging.getLogger(__name__)
 
@@ -385,13 +385,16 @@ def _process_entries(l, entries):
         an ``(old, new)`` tuple that describes the current state of
         the entries and what they will look like after modification.
         Each item in the tuple is an OrderedDict that maps an entry DN
-        to another dict that maps an attribute name to a set of its
-        values (it's a set because according to the LDAP spec,
+        to another dict that maps an attribute name to a
+        WeaklyOrderedSet of its values.  (According to the LDAP spec,
         attribute value ordering is unspecified and there can't be
-        duplicates).  The structure looks like this::
+        duplicates.  WeaklyOrderedSets are used instead of plain sets
+        to provide some compatibility with OpenLDAP's X-ORDERED schema
+        extension.)  The structure looks like this::
 
-            {dn1: {attr1: set([val1])},
-             dn2: {attr1: set([val2]), attr2: set([val3, val4])}}
+            {dn1: {attr1: WeaklyOrderedSet([val1])},
+             dn2: {attr1: WeaklyOrderedSet([val2]),
+                   attr2: WeaklyOrderedSet([val3, val4])}}
 
         All of an entry's attributes and values will be included, even
         if they will not be modified.  If an entry mentioned in the
@@ -422,7 +425,7 @@ def _process_entries(l, entries):
                 results = __salt__['ldap3.search'](l, dn, 'base')
                 if len(results) == 1:
                     attrs = results[dn]
-                    olde = dict(((attr, OrderedSet(attrs[attr]))
+                    olde = dict(((attr, WeaklyOrderedSet(attrs[attr]))
                                  for attr in attrs
                                  if len(attrs[attr])))
                 else:
@@ -470,7 +473,7 @@ def _update_entry(entry, status, directives):
             continue
         for attr, vals in six.iteritems(state):
             status['mentioned_attributes'].add(attr)
-            vals = _toset(vals)
+            vals = _canonicalize_values(vals)
             if directive == 'default':
                 if len(vals) and (attr not in entry or not len(entry[attr])):
                     entry[attr] = vals
@@ -479,7 +482,7 @@ def _update_entry(entry, status, directives):
                 if len(vals):
                     entry[attr] = vals
             elif directive == 'delete':
-                existing_vals = entry.pop(attr, OrderedSet())
+                existing_vals = entry.pop(attr, WeaklyOrderedSet())
                 if len(vals):
                     existing_vals -= vals
                     if len(existing_vals):
@@ -492,35 +495,45 @@ def _update_entry(entry, status, directives):
                 raise ValueError('unknown directive: ' + directive)
 
 
-def _toset(thing):
-    '''helper to convert various things to a set
+def _canonicalize_values(thing):
+    '''Canonicalize a collection of attribute values.
 
-    This enables flexibility in what users provide as the list of LDAP
-    entry attribute values.  Note that the LDAP spec prohibits
+    Returns a WeaklyOrderedSet containing the attribute values
+    provided in ``thing``, canonicalized as follows::
+
+    * If ``thing`` is None, an empty WeaklyOrderedSet is returned.
+    * If ``thing`` is a non-None scalar (string, number, non-iterable
+      object, etc.) then the returned WeaklyOrderedSet contains only
+      ``thing`` converted to a string.
+    * Otherwise (``thing`` is a non-string iterable), the returned
+      WeaklyOrderedSet contains each element in ``thing`` converted to
+      a string.
+
+    Canonicalizing in this way gives the user flexibility in how the
+    LDAP attribute values are specified, and it facilitates comparison
+    with values stored in LDAP.
+
+    The return value is a set type because the LDAP spec prohibits
     duplicate values in an attribute.
 
-    RFC 2251 states that:
-    "The order of attribute values within the vals set is undefined and
-     implementation-dependent, and MUST NOT be relied upon."
-    However, OpenLDAP have an X-ORDERED that is used in the config schema.
-    Using sets would mean we can't pass ordered values and therefore can't
-    manage parts of the OpenLDAP configuration, hence the use of OrderedSet.
-
-    Sets are also good for automatically removing duplicates.
-
-    None becomes an empty set.  Iterables except for strings have
-    their elements added to a new set.  Non-None scalars (strings,
-    numbers, non-iterable objects, etc.) are added as the only member
-    of a new set.
-
+    RFC4511 section 4.1.7 says, "The set of attribute values is
+    unordered.  Implementations MUST NOT rely upon the ordering being
+    repeatable."  However, OpenLDAP uses a non-standard X-ORDERED
+    schema extension to add ordering in the config DIT.  The use of
+    WeaklyOrderedSet in this function adds some support for this
+    non-standard extension.  WeaklyOrderedSet preserves iteration
+    order, which ensures that the order of the values sent to the
+    server matches the order of the values provided by the user.
+    WeaklyOrderedSet is used instead of OrderedSet in case the server
+    does not return values in the same order each time.
     '''
     if thing is None:
-        return OrderedSet()
+        return WeaklyOrderedSet()
     if isinstance(thing, six.string_types):
-        return OrderedSet((thing,))
+        return WeaklyOrderedSet((thing,))
     # convert numbers to strings so that equality checks work
     # (LDAP stores numbers as strings)
     try:
-        return OrderedSet((six.text_type(x) for x in thing))
+        return WeaklyOrderedSet((six.text_type(x) for x in thing))
     except TypeError:
-        return OrderedSet((six.text_type(thing),))
+        return WeaklyOrderedSet((six.text_type(thing),))
