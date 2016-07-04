@@ -25,6 +25,10 @@ except ImportError:
 import logging
 from salt.ext import six
 import sys
+from salt.utils.oset import WeaklyOrderedSet
+
+class AttributeSet(WeaklyOrderedSet):
+    pass
 
 log = logging.getLogger(__name__)
 
@@ -523,13 +527,24 @@ def change(connect_spec, dn, before, after):
     between the two, computes directives based on the differences, and
     executes the directives.
 
-    Any attribute value present in ``before`` but missing in ``after``
-    is deleted.  Any attribute value present in ``after`` but missing
-    in ``before`` is added.  Any attribute value in the database that
-    is not mentioned in either ``before`` or ``after`` is not altered.
-    Any attribute value that is present in both ``before`` and
-    ``after`` is ignored, regardless of whether that attribute value
-    exists in the database.
+    The directives are computed as follows:
+
+    * If an attribute name is present in ``before`` but missing or
+      mapped to a zero-length iterable of values in ``after``, the
+      attribute is deleted (regardless of whether the values in the
+      database match the values in ``before``).
+
+    * Otherwise, if some values are present in ``before`` but missing
+      from ``after`` and some values are present in ``after`` but
+      missing from ``before``, all of the attribute's values are
+      replaced with the values in ``after`` (regardless of whether the
+      values in the database match the values in ``before``).
+
+    * Otherwise, if some values are present in ``before`` but missing
+      from ``after``, those specific values are deleted.
+
+    * Otherwise, if some values are present in ``after`` but missing
+      from ``before``, those specific values are added.
 
     :param connect_spec:
         See the documentation for the ``connect_spec`` parameter for
@@ -564,21 +579,41 @@ def change(connect_spec, dn, before, after):
         before="{'example_value': 'before_val'}"
         after="{'example_value': 'after_val'}"
     '''
-    l = connect(connect_spec)
-    # convert the "iterable of values" to lists in case that's what
-    # modifyModlist() expects (also to ensure that the caller's dicts
-    # are not modified)
-    before = dict(((attr, list(vals))
-                   for attr, vals in six.iteritems(before)))
-    after = dict(((attr, list(vals))
-                  for attr, vals in six.iteritems(after)))
-
     if 'unicodePwd' in after:
-        after['unicodePwd'] = [_format_unicode_password(x) for x in after['unicodePwd']]
+        # Shallow copy 'after' to avoid modifying the caller's object.
+        after = dict(six.iteritems(after))
+        after['unicodePwd'] = [_format_unicode_password(x)
+                               for x in after['unicodePwd']]
 
-    modlist = ldap.modlist.modifyModlist(before, after)
-    try:
-        l.c.modify_s(dn, modlist)
-    except ldap.LDAPError as e:
-        _convert_exception(e)
-    return True
+    directives = []
+    for attr, before_vals in six.iteritems(before):
+        # convert the "iterable of values" to an ordered set to ensure
+        # value uniqueness and to ensure that the caller's objects
+        # aren't modified.  preserving order matters for X-ORDERED
+        # attributes.
+        before_vals = AttributeSet(before_vals)
+        if not len(after.get(attr, ())):
+            directives.append(('delete', attr, ()))
+            continue
+        after_vals = AttributeSet(after[attr])
+        only_in_before = before_vals - after_vals
+        only_in_after = after_vals - before_vals
+        if len(only_in_before):
+            if len(only_in_after):
+                directives.append(('replace', attr, after_vals))
+            else:
+                directives.append(('delete', attr, only_in_before))
+        else:
+            if len(only_in_after):
+                directives.append(('add', attr, only_in_after))
+            else:
+                # nothing to do for this attribute because they
+                # already match
+                assert before_vals == after_vals
+    for attr, after_vals in six.iteritems(after):
+        if attr in before or not len(after_vals):
+            # either already handled above or nothing to add
+            contine
+        directives.append(('add', attr, list(after_vals)))
+
+    return modify(connect_spec, dn, directives)
